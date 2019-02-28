@@ -18,6 +18,17 @@
 #include "sdmmc_cmd.h"
 #include "esp_log.h"
 
+#include "string.h"
+#define BUF_SIZE 32
+//FF_MIN_SS = 512 /*sec size*/
+BYTE bBuf[FF_MIN_SS*BUF_SIZE];
+
+
+DWORD StartSect = 0;
+DWORD EndSect = 0;
+bool NeedRefresh = true;
+
+
 static sdmmc_card_t* s_cards[FF_VOLUMES] = { NULL };
 
 static const char* TAG = "diskio_sdmmc";
@@ -32,16 +43,55 @@ DSTATUS ff_sdmmc_status (BYTE pdrv)
     return 0;
 }
 
-DRESULT ff_sdmmc_read (BYTE pdrv, BYTE* buff, DWORD sector, UINT count)
-{
+DRESULT ReadBuf(BYTE pdrv, BYTE* bBuf, DWORD sector, BYTE* buff){
+
     sdmmc_card_t* card = s_cards[pdrv];
     assert(card);
-    esp_err_t err = sdmmc_read_sectors(card, buff, sector, count);
+    esp_err_t err = sdmmc_read_sectors(card, bBuf, sector, BUF_SIZE); //read BUF_SIZE sectors to bBuf buffer
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "sdmmc_read_blocks failed (%d)", err);
-        return RES_ERROR;
-    }
-    return RES_OK;
+    ESP_LOGE(TAG, "sdmmc_read_blocks failed (%d)", err);
+    return RES_ERROR;
+                        }
+    memcpy(buff, &bBuf[0], FF_MIN_SS); //send 1st sector out
+    NeedRefresh = false;
+    StartSect = sector; //mem start sector number
+    EndSect = sector + BUF_SIZE - 1;
+    return RES_OK; //stop and return
+
+}
+
+DRESULT ff_sdmmc_read (BYTE pdrv, BYTE* buff, DWORD sector, UINT count)
+{
+if(count > 1){
+ESP_LOGE(TAG, "WARNING!!! Buffer unconsistent, must be 1, but now > 1 check fatfs lib version, count =  (%d)", count);
+}
+if(NeedRefresh){
+
+esp_err_t err = ReadBuf(pdrv, bBuf, sector, buff);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "sdmmc_buffer_renew_failed (%d)", err);
+        return RES_ERROR;}
+    return RES_OK; //stop and return
+  }else if(sector > StartSect && sector <= EndSect )
+          { //if sector exist in buffer
+
+            //ESP_LOGE(TAG, "Sector in range, sector = (%ld)", EndSect);
+          int i = (sector - StartSect)*FF_MIN_SS; //find sector address
+          memcpy(buff, &bBuf[i], FF_MIN_SS); //send sector out
+          return RES_OK; //stop and return
+
+          }else{
+       
+    esp_err_t err = ReadBuf(pdrv, bBuf, sector, buff);
+    if (err != ESP_OK) {
+    ESP_LOGE(TAG, "sdmmc_read_to_buffer failed (%d)", err);
+    return RES_ERROR;}
+    return RES_OK; //stop and return
+            
+            }
+
+return RES_OK; //stop and return
+  
 }
 
 DRESULT ff_sdmmc_write (BYTE pdrv, const BYTE* buff, DWORD sector, UINT count)
